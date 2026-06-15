@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Media Signal Formatter</title>
+<style>
+body{
+  margin:0;
+  background:#07101d;
+  color:#d9e7ff;
+  font-family:Courier New, monospace;
+}
+.wrap{
+  max-width:850px;
+  margin:auto;
+  padding:18px;
+}
+.card{
+  border:1px solid #263955;
+  background:#0c1728;
+  border-radius:12px;
+  padding:14px;
+  margin:12px 0;
+}
+h1{
+  color:#5cc8ff;
+  font-size:22px;
+  margin:0 0 6px;
+}
+.small{
+  color:#8fa3bf;
+  font-size:14px;
+}
+label{
+  color:#46f0a6;
+  display:block;
+  font-weight:bold;
+  margin-bottom:8px;
+}
+select,input,textarea{
+  width:100%;
+  box-sizing:border-box;
+  background:#050914;
+  color:#d9e7ff;
+  border:1px solid #2c4568;
+  border-radius:8px;
+  padding:12px;
+  font-family:Courier New, monospace;
+  font-size:16px;
+}
+textarea{
+  min-height:130px;
+}
+button{
+  background:#12304a;
+  color:white;
+  border:1px solid #3b5f87;
+  border-radius:8px;
+  padding:12px;
+  margin:6px 4px 0 0;
+  font-weight:bold;
+  font-family:Courier New, monospace;
+}
+#status{
+  margin-top:10px;
+  font-weight:bold;
+}
+.ok{color:#46f0a6;}
+.bad{color:#ff6b6b;}
+.fake{
+  color:#57708f;
+  font-size:13px;
+  white-space:pre-wrap;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>MEDIA SIGNAL FORMATTER v3.0</h1>
+    <div class="small">Diagnostic payload converter / local render utility</div>
+  </div>
+
+  <div class="card fake">SYSTEM: ready
+CHANNEL_MAP: local
+PAYLOAD_MODE: manual
+FORMAT: encoded stream
+NETWORK: offline
+SCRIPT_STATUS: <span id="scriptCheck">checking...</span></div>
+
+  <div class="card">
+    <label>Signal Profile</label>
+    <select id="profile">
+      <option value="">Select profile</option>
+      <option value="a17">Profile A-17</option>
+      <option value="b42">Profile B-42</option>
+    </select>
+    <div class="small">Select the correct signal profile before formatting or reading a signal.</div>
+  </div>
+
+  <div class="card">
+    <label>Access Token</label>
+    <input id="key" type="password" placeholder="Enter access token">
+    <div class="small">Enter the access token assigned to the selected profile.</div>
+  </div>
+
+  <div class="card">
+    <label>Input Buffer</label>
+    <textarea id="input" placeholder="Type a message to format, or paste formatted text here to read."></textarea>
+    <br>
+    <button type="button" id="encodeBtn">Format Signal</button>
+    <button type="button" id="decodeBtn">Read Signal</button>
+    <button type="button" id="copyBtn">Copy Output</button>
+    <button type="button" id="clearBtn">Clear</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <label>Output Buffer</label>
+    <textarea id="output" readonly placeholder="Output appears here."></textarea>
+    <div class="small">Formatted signals begin with MEDIA4:. Send the entire scrambled text.</div>
+  </div>
+
+  <div class="card small">
+    This file runs locally. It does not need a website, account, or subscription.
+  </div>
+</div>
+
+<script>
+(function(){
+  var PREFIX = "MEDIA4:";
+
+  function byId(id){ return document.getElementById(id); }
+
+  function setStatus(msg, good){
+    var s = byId("status");
+    s.innerHTML = msg;
+    s.className = good ? "ok" : "bad";
+  }
+
+  function getProfile(){
+    var p = byId("profile").value;
+    if(!p){ throw "Select a signal profile first."; }
+    return p;
+  }
+
+  function getKey(){
+    var k = byId("key").value;
+    if(!k){ throw "Enter the access token first."; }
+    return k;
+  }
+
+  function verify(){
+    var p = getProfile();
+    var k = getKey();
+
+    if(p === "a17" && k === "sun and moon"){ return p + "|" + k; }
+    if(p === "b42" && k === "Smurf"){ return p + "|" + k; }
+
+    throw "Access token rejected for this profile.";
+  }
+
+  function makeSeed(str){
+    var seed = 0;
+    for(var i=0;i<str.length;i++){
+      seed = ((seed * 31) + str.charCodeAt(i)) >>> 0;
+    }
+    return seed || 123456789;
+  }
+
+  function nextRand(state){
+    state.value = (state.value * 1664525 + 1013904223) >>> 0;
+    return (state.value >>> 16) & 255;
+  }
+
+  function unicodeToSafeBytes(str){
+    var encoded = encodeURIComponent(str);
+    var bytes = [];
+    for(var i=0;i<encoded.length;i++){
+      bytes.push(encoded.charCodeAt(i));
+    }
+    return bytes;
+  }
+
+  function safeBytesToUnicode(bytes){
+    var s = "";
+    for(var i=0;i<bytes.length;i++){
+      s += String.fromCharCode(bytes[i]);
+    }
+    return decodeURIComponent(s);
+  }
+
+  function bytesToBase64(bytes){
+    var s = "";
+    for(var i=0;i<bytes.length;i++){
+      s += String.fromCharCode(bytes[i]);
+    }
+    return btoa(s);
+  }
+
+  function base64ToBytes(b64){
+    var s = atob(b64);
+    var bytes = [];
+    for(var i=0;i<s.length;i++){
+      bytes.push(s.charCodeAt(i));
+    }
+    return bytes;
+  }
+
+  function encode(){
+    try{
+      var seedText = verify();
+      var msg = byId("input").value;
+      if(!msg){ throw "Input buffer is empty."; }
+
+      var nonce = String(new Date().getTime()) + "-" + String(Math.floor(Math.random()*1000000));
+      var bytes = unicodeToSafeBytes(msg);
+      var state = { value: makeSeed(seedText + "|" + nonce) };
+      var out = [];
+
+      for(var i=0;i<bytes.length;i++){
+        out.push(bytes[i] ^ nextRand(state));
+      }
+
+      var packageText = getProfile() + "." + nonce + "." + bytesToBase64(out);
+      byId("output").value = "media4:" + btoa(packageText);
+      setStatus("Signal formatted. Copy output.", true);
+    }catch(e){
+      setStatus(String(e), false);
+    }
+  }
+
+  function decode(){
+    try{
+      var seedText = verify();
+      var locked = byId("input").value.replace(/\s+/g,"");
+      if(!locked){ throw "Paste a formatted signal first."; }
+      if(locked.toUpperCase().indexOf(PREFIX) !== 0){ throw "This is not a valid MEDIA4 signal."; }
+
+      var packageText = atob(locked.substring(PREFIX.length));
+      var firstDot = packageText.indexOf(".");
+      var secondDot = packageText.indexOf(".", firstDot + 1);
+
+      if(firstDot < 0 || secondDot < 0){ throw "Signal format damaged."; }
+
+      var profile = packageText.substring(0, firstDot);
+      var nonce = packageText.substring(firstDot + 1, secondDot);
+      var data = packageText.substring(secondDot + 1);
+
+      if(profile !== getProfile()){ throw "Wrong signal profile selected."; }
+
+      var bytes = base64ToBytes(data);
+      var state = { value: makeSeed(seedText + "|" + nonce) };
+      var out = [];
+
+      for(var i=0;i<bytes.length;i++){
+        out.push(bytes[i] ^ nextRand(state));
+      }
+
+      byId("output").value = safeBytesToUnicode(out);
+      setStatus("Signal read successfully.", true);
+    }catch(e){
+      setStatus("Unable to read signal. Wrong profile, wrong access token, or changed text.", false);
+    }
+  }
+
+  function copy(){
+    var out = byId("output").value;
+    if(!out){ setStatus("Nothing to copy.", false); return; }
+
+    byId("output").focus();
+    byId("output").select();
+
+    try{
+      document.execCommand("copy");
+      setStatus("Output copied.", true);
+    }catch(e){
+      setStatus("Select the output text and copy it manually.", false);
+    }
+  }
+
+  function clearAll(){
+    byId("input").value = "";
+    byId("output").value = "";
+    byId("status").innerHTML = "";
+    byId("status").className = "";
+  }
+
+  byId("scriptCheck").innerHTML = "active";
+  byId("encodeBtn").onclick = encode;
+  byId("decodeBtn").onclick = decode;
+  byId("copyBtn").onclick = copy;
+  byId("clearBtn").onclick = clearAll;
+})();
+</script>
+</body>
+</html>
